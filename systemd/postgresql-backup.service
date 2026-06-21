@@ -1,0 +1,21 @@
+[Unit]
+Description=PostgreSQL backup (Node.js)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+EnvironmentFile=/etc/postgresql-backup.env
+WorkingDirectory=/opt/postgresql-backup
+ExecStart=/usr/bin/node src/index.js run
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=postgresql-backup
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/postgresql
