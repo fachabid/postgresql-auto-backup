@@ -11,7 +11,7 @@ Usage:
   node src/index.js [--dry-run] run
   node src/index.js [--dry-run] backup
   node src/index.js [--dry-run] cleanup
-  node src/index.js restore --file <chemin.sql.gz> [--database <nom>]
+  node src/index.js restore --file <chemin.sql.gz> [--database <nom>] [--instance <id>]
 
 Commandes:
   run       Exécute backup puis cleanup (utilisé par systemd)
@@ -23,6 +23,7 @@ Options:
   --dry-run Simule l'opération sans modifier le système
   --file    Chemin du fichier de sauvegarde (.sql.gz)
   --database Nom de la base cible (obligatoire sauf dump de rôles)
+  --instance Identifiant PostgreSQL (ex. pg14, default) si non déductible du fichier
 `.trim();
 
 function parseArgs(argv) {
@@ -47,6 +48,12 @@ function parseArgs(argv) {
 
     if (arg === '--database') {
       options.database = args[i + 1];
+      i += 1;
+      continue;
+    }
+
+    if (arg === '--instance') {
+      options.instance = args[i + 1];
       i += 1;
       continue;
     }

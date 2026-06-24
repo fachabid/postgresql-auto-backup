@@ -8,6 +8,8 @@ Type=oneshot
 User=postgres
 Group=postgres
 EnvironmentFile=/etc/postgresql-backup.env
+# Optionnel : fichier YAML à la place des variables PG_INSTANCES
+# Environment=CONFIG_FILE=/etc/postgresql-backup.yaml
 WorkingDirectory=/opt/postgresql-backup
 ExecStart=/usr/bin/node src/index.js run
 StandardOutput=journal

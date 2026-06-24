@@ -1,14 +1,15 @@
 # postgresql-backup
 
-Application Node.js pour automatiser les sauvegardes PostgreSQL 14 sur Ubuntu via `pg_dump`, avec compression gzip, rétention configurable et intégration systemd.
+Application Node.js pour automatiser les sauvegardes PostgreSQL sur Ubuntu via `pg_dump`, avec compression gzip, rétention configurable, support multi-instance/multi-version et intégration systemd.
 
 ## Fonctionnalités
 
 - Sauvegarde journalière planifiée par **systemd timer**
-- Fichiers horodatés : `{dbname}_YYYY-MM-DD_HH-mm-ss.sql.gz`
+- Fichiers horodatés : `{instance}_{dbname}_YYYY-MM-DD_HH-mm-ss.sql.gz`
 - Compression gzip en streaming (sans fichier temporaire)
 - Suppression automatique des backups de plus de 30 jours (configurable)
-- Support multi-bases (`BACKUP_DATABASES`)
+- Support multi-bases et **multi-instances PostgreSQL** (versions/ports différents)
+- Configuration `.env` ou fichier YAML (`CONFIG_FILE`)
 - Option sauvegarde des rôles (`BACKUP_ROLES=true`)
 - Mode dry-run
 - Commande de restauration intégrée
@@ -16,13 +17,18 @@ Application Node.js pour automatiser les sauvegardes PostgreSQL 14 sur Ubuntu vi
 
 ## Prérequis
 
-- Ubuntu avec PostgreSQL 14
+- Ubuntu avec PostgreSQL 14+ (une ou plusieurs instances)
 - Node.js 18+ installé **au niveau système** (voir [Installation de Node.js](#installation-de-nodejs))
-- Client PostgreSQL : `postgresql-client-14`
+- Client(s) PostgreSQL correspondant(s) : `postgresql-client-14`, `postgresql-client-16`, etc.
 
 ```bash
 sudo apt update
 sudo apt install -y postgresql-client-14
+
+# Multi-version : installer un client par version majeure
+# sudo apt install -y postgresql-client-14 postgresql-client-16
+# ls /usr/lib/postgresql/14/bin/pg_dump
+# ls /usr/lib/postgresql/16/bin/pg_dump
 
 # Vérifier pg_dump
 pg_dump --version
@@ -158,14 +164,79 @@ Copier `.env.example` comme base :
 | `DRY_RUN` | non | `false` | Mode simulation |
 | `LOG_FORMAT` | non | `text` | `text` ou `json` |
 | `LOG_FILE` | non | — | Chemin fichier log optionnel |
+| `PG_INSTANCES` | non* | — | Liste d'instances (mode multi) : `pg14,pg16` |
+| `CONFIG_FILE` | non* | — | Chemin YAML (prioritaire sur `PG_INSTANCES`) |
 
-Lister les bases disponibles avant de configurer :
+\* Mode **legacy** : `PGUSER` + `BACKUP_DATABASES` suffisent. Mode **multi** : `PG_INSTANCES` ou `CONFIG_FILE`.
+
+### Mode legacy (une instance — rétrocompatible)
+
+Une instance implicite `default`. Fichiers : `default_{dbname}_{timestamp}.sql.gz`
+
+```env
+PGHOST=localhost
+PGUSER=postgres
+PGPASSWORD=...
+BACKUP_DATABASES=ile_db,test_vector_db
+```
+
+Les anciens backups `{dbname}_{timestamp}.sql.gz` (sans préfixe) restent restaurables sur l'instance `default`.
+
+### Mode multi-instance (.env)
+
+Plusieurs PostgreSQL sur le même serveur (versions ou ports différents) :
+
+```env
+PG_INSTANCES=pg14,pg16
+
+pg14_HOST=localhost
+pg14_PORT=5432
+pg14_USER=postgres
+pg14_PASSWORD=secret14
+pg14_DATABASES=ile_db,test_vector_db
+pg14_VERSION=14
+
+pg16_HOST=localhost
+pg16_PORT=5433
+pg16_USER=postgres
+pg16_PASSWORD=secret16
+pg16_DATABASES=app_new
+pg16_VERSION=16
+```
+
+- Préfixe instance en majuscules : `pg14_HOST` ou `PG14_HOST`
+- `pg14_VERSION=14` résout automatiquement `/usr/lib/postgresql/14/bin/pg_dump`
+- Binaires explicites optionnels : `pg14_PG_DUMP`, `pg14_PSQL`, etc.
+- Fallback global : `PGUSER` / `PGPASSWORD` si non définis par instance
+
+Fichiers générés : `pg14_ile_db_{timestamp}.sql.gz`, `pg16_app_new_{timestamp}.sql.gz`
+
+### Mode YAML
+
+```bash
+sudo cp /opt/postgresql-backup/config/instances.example.yaml /etc/postgresql-backup.yaml
+sudo chmod 600 /etc/postgresql-backup.yaml
+```
+
+Dans `/etc/postgresql-backup.env` :
+
+```env
+CONFIG_FILE=/etc/postgresql-backup.yaml
+```
+
+Voir [`config/instances.example.yaml`](config/instances.example.yaml) pour le schéma complet.
+
+### Priorité de chargement
+
+1. `CONFIG_FILE` (YAML)
+2. `PG_INSTANCES` (.env multi)
+3. Mode legacy (`PGHOST`, `BACKUP_DATABASES`, …)
 
 ```bash
 sudo -u postgres psql -l
 ```
 
-Exemple :
+Exemple legacy :
 
 ```env
 BACKUP_DATABASES=ile_db,test_vector_db
@@ -214,7 +285,7 @@ pgbackup run
 pgbackup --dry-run run
 pgbackup backup
 pgbackup cleanup
-pgbackup restore --file /var/backups/postgresql/myapp_DATE.sql.gz --database myapp_restore_test
+pgbackup restore --file /var/backups/postgresql/pg14_myapp_DATE.sql.gz --database myapp_restore_test --instance pg14
 ```
 
 > **Note :** systemd charge `/etc/postgresql-backup.env` automatiquement via `EnvironmentFile=`. Les commandes manuelles ci-dessus doivent charger ce fichier explicitement avec `source`.
@@ -289,8 +360,10 @@ sudo -u postgres psql -c "CREATE DATABASE myapp_restore_test;"
 3. **Restaurer via l'application**
 
 ```bash
-sudo -u postgres bash -c 'set -a; source /etc/postgresql-backup.env; set +a; /usr/bin/node /opt/postgresql-backup/src/index.js restore --file /var/backups/postgresql/myapp_2026-06-06_02-00-01.sql.gz --database myapp_restore_test'
+sudo -u postgres bash -c 'set -a; source /etc/postgresql-backup.env; set +a; /usr/bin/node /opt/postgresql-backup/src/index.js restore --file /var/backups/postgresql/default_myapp_2026-06-06_02-00-01.sql.gz --database myapp_restore_test'
 ```
+
+L'option `--instance` est requise si plusieurs instances sont configurées et que le préfixe du fichier est ambigu. Sinon, l'instance est déduite du nom de fichier (`pg14_...`, `default_...`, ou format legacy `{db}_...`).
 
 4. **Vérifier les données**
 
@@ -320,7 +393,7 @@ gunzip -c /var/backups/postgresql/myapp_2026-06-06_02-00-01.sql.gz | \
 Restaurer **avant** les bases :
 
 ```bash
-sudo -u postgres bash -c 'set -a; source /etc/postgresql-backup.env; set +a; /usr/bin/node /opt/postgresql-backup/src/index.js restore --file /var/backups/postgresql/roles_2026-06-06_02-00-01.sql.gz'
+sudo -u postgres bash -c 'set -a; source /etc/postgresql-backup.env; set +a; /usr/bin/node /opt/postgresql-backup/src/index.js restore --file /var/backups/postgresql/pg14_roles_2026-06-06_02-00-01.sql.gz --instance pg14'
 ```
 
 Ou manuellement :
@@ -355,6 +428,9 @@ sudo -u postgres psql -d myapp_restore_test -c "CREATE EXTENSION IF NOT EXISTS v
 | `node -v` OK mais `/usr/bin/node` introuvable | `which node` pointe vers nvm → installer NodeSource, vérifier `/usr/bin/node` |
 | systemd échoue avec `status=203/EXEC` | `ExecStart` pointe vers un binaire inexistant → installer Node système ou corriger vers `/usr/bin/node` |
 | Node installé mais version < 18 | Mettre à jour via NodeSource `setup_22.x` |
+| `pg_dump` version incompatible | Installer le client correspondant : `postgresql-client-14` |
+| Binaire introuvable pour une instance | Définir `pg14_VERSION=14` ou `pg14_PG_DUMP=/chemin/pg_dump` |
+| `Instance inconnue` à la restauration | Passer `--instance pg14` ou vérifier le préfixe du fichier |
 | `chown: No such file or directory` | Exécuter `mkdir -p` avant `chown` |
 | `database "xxx" does not exist` | Vérifier `BACKUP_DATABASES` avec `sudo -u postgres psql -l` |
 | Timer actif mais pas de backup visible | `sudo systemctl start postgresql-backup.service` puis `journalctl -u postgresql-backup.service` |
