@@ -17,19 +17,72 @@ Application Node.js pour automatiser les sauvegardes PostgreSQL 14 sur Ubuntu vi
 ## Prérequis
 
 - Ubuntu avec PostgreSQL 14
-- Node.js 18+ (ex. `/usr/bin/node` via apt ou NodeSource)
+- Node.js 18+ installé **au niveau système** (voir [Installation de Node.js](#installation-de-nodejs))
 - Client PostgreSQL : `postgresql-client-14`
 
 ```bash
 sudo apt update
-sudo apt install -y postgresql-client-14 nodejs
+sudo apt install -y postgresql-client-14
 
-# Vérifier
-/usr/bin/node -v
+# Vérifier pg_dump
 pg_dump --version
 ```
 
+## Installation de Node.js
+
+Le service systemd et les commandes manuelles utilisent **`/usr/bin/node`** sous l'utilisateur **`postgres`**. Node doit donc être installé **au niveau système**, pas uniquement pour un utilisateur.
+
+### Pourquoi pas nvm ?
+
+**nvm** installe Node dans le home d'un utilisateur (`~/.nvm/...`) et le charge via `.bashrc`. Cela ne fonctionne pas pour cet outil car :
+
+- le service tourne sous `User=postgres`, qui n'a pas nvm dans son PATH ;
+- `ExecStart=/usr/bin/node` dans le service systemd pointe vers un binaire système ;
+- `ProtectHome=true` empêche l'accès aux répertoires home depuis le service.
+
+**Ne pas utiliser nvm** pour ce projet, même s'il est déjà installé pour le développement.
+
+### Option recommandée — NodeSource (Node 22)
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# Vérifications obligatoires
+/usr/bin/node -v                        # doit afficher v18+ (idéalement v22)
+sudo -u postgres /usr/bin/node -v     # même résultat
+which node                              # doit retourner /usr/bin/node
+```
+
+### Option alternative — apt Ubuntu (si version >= 18)
+
+```bash
+sudo apt update
+sudo apt install -y nodejs
+/usr/bin/node -v   # vérifier que la version est >= 18
+```
+
+Si la version est inférieure à 18, utilisez NodeSource.
+
+### Si nvm est déjà installé sur le serveur
+
+- Vous pouvez garder nvm pour le développement.
+- **Installez quand même** Node système via NodeSource (les deux coexistent).
+- Utilisez toujours `/usr/bin/node` pour les backups.
+- Ne modifiez pas `ExecStart` pour pointer vers `~/.nvm/...`.
+
+### Checklist avant de continuer
+
+```bash
+test -x /usr/bin/node && echo "OK node systeme" || echo "ECHEC"
+sudo -u postgres /usr/bin/node -e "console.log('OK postgres')"
+```
+
+Les deux commandes doivent réussir avant de cloner le projet et d'activer le timer.
+
 ## Installation sur Ubuntu
+
+> Avant de cloner le projet, validez que `/usr/bin/node` fonctionne pour l'utilisateur `postgres` (voir [Installation de Node.js](#installation-de-nodejs)).
 
 ### Option A — GitHub (recommandé)
 
@@ -297,7 +350,11 @@ sudo -u postgres psql -d myapp_restore_test -c "CREATE EXTENSION IF NOT EXISTS v
 |---|---|
 | `Password authentication is not supported` (GitHub) | Utiliser un PAT ou SSH, pas le mot de passe GitHub |
 | `Permission denied` sur `/etc/postgresql-backup.env` | `sudo chown postgres:postgres /etc/postgresql-backup.env` + `chmod 600` |
-| `node: command not found` sous `postgres` | Utiliser `/usr/bin/node` ; vérifier avec `which node` |
+| `node: command not found` sous `postgres` | Node installé via nvm uniquement → installer Node système (NodeSource), utiliser `/usr/bin/node` |
+| `node -v` OK en root mais pas sous `postgres` | Même cause : installer Node système via NodeSource |
+| `node -v` OK mais `/usr/bin/node` introuvable | `which node` pointe vers nvm → installer NodeSource, vérifier `/usr/bin/node` |
+| systemd échoue avec `status=203/EXEC` | `ExecStart` pointe vers un binaire inexistant → installer Node système ou corriger vers `/usr/bin/node` |
+| Node installé mais version < 18 | Mettre à jour via NodeSource `setup_22.x` |
 | `chown: No such file or directory` | Exécuter `mkdir -p` avant `chown` |
 | `database "xxx" does not exist` | Vérifier `BACKUP_DATABASES` avec `sudo -u postgres psql -l` |
 | Timer actif mais pas de backup visible | `sudo systemctl start postgresql-backup.service` puis `journalctl -u postgresql-backup.service` |
