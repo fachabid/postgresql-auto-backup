@@ -1,5 +1,9 @@
 # postgresql-backup
 
+[![CI](https://github.com/fachabid/postgresql-backup/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/fachabid/postgresql-backup/actions/workflows/ci.yml)
+[![Licence : MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
+![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)
+
 Application Node.js pour automatiser les sauvegardes PostgreSQL sur Ubuntu via `pg_dump`, avec compression gzip, rétention configurable, support multi-instance/multi-version et intégration systemd.
 
 ## Fonctionnalités
