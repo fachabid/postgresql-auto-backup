@@ -6,7 +6,7 @@
 - Mode multi-instances (`PG_INSTANCES`) avec binaires `pg_dump`/`psql` par version.
 - Rétention de sécurité `MIN_BACKUPS_KEPT` : les N sauvegardes les plus récentes de chaque base ne sont jamais supprimées.
 - Suite de tests (`npm test`, `node:test`, zéro dépendance) et test de bout en bout contre un vrai PostgreSQL.
-- Intégration continue GitHub Actions (Node 18/20/22, PostgreSQL 14).
+- Intégration continue GitHub Actions (Node 18/20/22 avec PostgreSQL 14, et PostgreSQL 16).
 
 ### Corrigé
 - Une base en échec n'interrompt plus la sauvegarde des suivantes ; les échecs sont agrégés (code de sortie 1).
@@ -17,8 +17,8 @@
 - `--help` fonctionne ; une option sans valeur est refusée.
 - En multi-instances, `PG_DUMP`/`PG_DUMPALL`/`PSQL` globaux servent de repli.
 
-### Supprimé
-- Configuration par fichier YAML (`CONFIG_FILE`) : parseur maison fragile (un `#` dans un mot de passe le tronquait). Utiliser les variables d'environnement.
+### Changé
+- Les fichiers de sauvegarde sont préfixés par l'instance : `{instance}_{base}_{horodatage}.sql.gz` (`default_` en mode simple). Les anciens fichiers `{base}_{horodatage}.sql.gz` restent restaurables.
 
 ## 1.0.0
 - Version initiale : `pg_dump` + gzip, systemd timer, rétention, restauration.
