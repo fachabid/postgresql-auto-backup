@@ -6,29 +6,38 @@ const path = require('path');
 const { pipeline } = require('stream/promises');
 const { createGzip } = require('zlib');
 const { formatTimestamp } = require('./logger');
+const { EXIT } = require('./config');
 
-function buildPgEnv(config) {
+const TMP_SUFFIX = '.tmp';
+
+function buildPgEnv(instance) {
   const env = {
     ...process.env,
-    PGHOST: config.pg.host,
-    PGPORT: config.pg.port,
-    PGUSER: config.pg.user,
+    PGHOST: instance.host,
+    PGPORT: instance.port,
+    PGUSER: instance.user,
   };
 
-  if (config.pg.password) {
-    env.PGPASSWORD = config.pg.password;
+  if (instance.password) {
+    env.PGPASSWORD = instance.password;
   }
 
-  if (config.pg.passfile) {
-    env.PGPASSFILE = config.pg.passfile;
+  if (instance.passfile) {
+    env.PGPASSFILE = instance.passfile;
   }
 
   return env;
 }
 
-async function dumpToGzipFile({ command, args, outputPath, config, logger, label }) {
+/**
+ * Exécute une commande de dump et écrit sa sortie compressée.
+ * Le fichier est écrit sous un nom temporaire (.tmp, mode 0600) puis renommé
+ * seulement si la commande a réussi : un fichier final est donc toujours complet.
+ */
+async function dumpToGzipFile({ command, args, outputPath, instance, config, logger, label }) {
   if (config.dryRun) {
     logger.info('[DRY-RUN] Sauvegarde simulée', {
+      instance: instance.id,
       command,
       args,
       outputPath,
@@ -39,13 +48,14 @@ async function dumpToGzipFile({ command, args, outputPath, config, logger, label
 
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
+  const tmpPath = `${outputPath}${TMP_SUFFIX}`;
   const child = spawn(command, args, {
-    env: buildPgEnv(config),
+    env: buildPgEnv(instance),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
   const gzip = createGzip();
-  const output = fs.createWriteStream(outputPath);
+  const output = fs.createWriteStream(tmpPath, { mode: 0o600 });
   let stderr = '';
 
   child.stderr.on('data', (chunk) => {
@@ -66,19 +76,20 @@ async function dumpToGzipFile({ command, args, outputPath, config, logger, label
     ]);
 
     if (exitCode !== 0) {
-      fs.unlink(outputPath, () => {});
       const detail = stderr.trim() || `code de sortie ${exitCode}`;
-      logger.error(`${command} a échoué`, { command, args, code: exitCode, stderr: detail });
-      throw new Error(`${command} a échoué : ${detail}`);
+      throw new Error(`${command} a échoué (${instance.id}) : ${detail}`);
     }
+
+    fs.renameSync(tmpPath, outputPath);
   } catch (err) {
     output.destroy();
-    fs.unlink(outputPath, () => {});
+    fs.rmSync(tmpPath, { force: true });
     throw err;
   }
 
   const stats = fs.statSync(outputPath);
   logger.info('Sauvegarde créée', {
+    instance: instance.id,
     label,
     outputPath,
     sizeBytes: stats.size,
@@ -87,59 +98,101 @@ async function dumpToGzipFile({ command, args, outputPath, config, logger, label
   return { outputPath, sizeBytes: stats.size, dryRun: false };
 }
 
-async function backupDatabase(database, config, logger, timestamp) {
-  const filename = `${database}_${timestamp}.sql.gz`;
-  const outputPath = path.join(config.backupDir, filename);
+async function backupDatabase(instance, database, config, logger, timestamp) {
+  const filename = `${instance.id}_${database}_${timestamp}.sql.gz`;
 
   return dumpToGzipFile({
-    command: 'pg_dump',
+    command: instance.bin.pgDump,
     args: ['--no-owner', '--no-acl', '-d', database],
-    outputPath,
+    outputPath: path.join(config.backupDir, filename),
+    instance,
     config,
     logger,
     label: database,
   });
 }
 
-async function backupRoles(config, logger, timestamp) {
-  const filename = `roles_${timestamp}.sql.gz`;
-  const outputPath = path.join(config.backupDir, filename);
+async function backupRoles(instance, config, logger, timestamp) {
+  const filename = `${instance.id}_roles_${timestamp}.sql.gz`;
 
   return dumpToGzipFile({
-    command: 'pg_dumpall',
+    command: instance.bin.pgDumpall,
     args: ['--roles-only'],
-    outputPath,
+    outputPath: path.join(config.backupDir, filename),
+    instance,
     config,
     logger,
     label: 'roles',
   });
 }
 
+/**
+ * Sauvegarde toutes les instances. Un échec sur une base n'interrompt pas les
+ * suivantes ; les échecs sont agrégés et signalés à la fin (exit code 1).
+ */
 async function runBackup(config, logger) {
   const timestamp = formatTimestamp();
   const results = [];
+  const failures = [];
 
   logger.info('Démarrage des sauvegardes', {
-    databases: config.databases,
+    instances: config.instances.map((i) => i.id),
     backupDir: config.backupDir,
-    backupRoles: config.backupRoles,
     dryRun: config.dryRun,
+    configSource: config.configSource,
   });
 
-  for (const database of config.databases) {
-    logger.info(`Sauvegarde de la base ${database}`);
-    const result = await backupDatabase(database, config, logger, timestamp);
-    results.push(result);
+  async function attempt(instance, label, task) {
+    try {
+      results.push(await task());
+    } catch (err) {
+      failures.push({ instance: instance.id, label, error: err.message });
+      logger.error(`Échec de la sauvegarde ${instance.id}/${label}`, {
+        instance: instance.id,
+        label,
+        error: err.message,
+      });
+    }
   }
 
-  if (config.backupRoles) {
-    logger.info('Sauvegarde des rôles PostgreSQL');
-    const result = await backupRoles(config, logger, timestamp);
-    results.push(result);
+  for (const instance of config.instances) {
+    logger.info(`Instance ${instance.id}`, {
+      host: instance.host,
+      port: instance.port,
+      databases: instance.databases,
+      backupRoles: instance.backupRoles,
+    });
+
+    for (const database of instance.databases) {
+      logger.info(`Sauvegarde de la base ${database}`, { instance: instance.id });
+      await attempt(instance, database, () =>
+        backupDatabase(instance, database, config, logger, timestamp));
+    }
+
+    if (instance.backupRoles) {
+      logger.info('Sauvegarde des rôles PostgreSQL', { instance: instance.id });
+      await attempt(instance, 'roles', () =>
+        backupRoles(instance, config, logger, timestamp));
+    }
   }
 
-  logger.info('Sauvegardes terminées', { count: results.length });
+  logger.info('Sauvegardes terminées', {
+    succeeded: results.length,
+    failed: failures.length,
+  });
+
+  if (failures.length > 0) {
+    const error = new Error(
+      `${failures.length} sauvegarde(s) en échec :\n- ${failures
+        .map((f) => `${f.instance}/${f.label} : ${f.error}`)
+        .join('\n- ')}`,
+    );
+    error.exitCode = EXIT.BACKUP_FAILED;
+    error.failures = failures;
+    throw error;
+  }
+
   return results;
 }
 
-module.exports = { runBackup, buildPgEnv };
+module.exports = { runBackup, buildPgEnv, TMP_SUFFIX };

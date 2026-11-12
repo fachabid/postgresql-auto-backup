@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }}, pg ${{ matrix.pg }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20, 22]
+        pg: [14]
+        include:
+          - node: 22
+            pg: 16
+    services:
+      postgres:
+        image: postgres:${{ matrix.pg }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PG_INTEGRATION: '1'
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # Le client (pg_dump/psql) doit avoir la même version majeure que le serveur :
+      # un pg_dump plus récent écrit des commandes SET inconnues d'un serveur plus ancien
+      # (ex. transaction_timeout, PostgreSQL 17) et la restauration échoue.
+      - name: Installer le client PostgreSQL ${{ matrix.pg }} (dépôt PGDG)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-${{ matrix.pg }}
+          echo "/usr/lib/postgresql/${{ matrix.pg }}/bin" >> "$GITHUB_PATH"
+      - name: Versions utilisées
+        run: |
+          node --version
+          pg_dump --version
+          psql --version
+          psql -d postgres -Atc 'select version()'
+      - run: npm test

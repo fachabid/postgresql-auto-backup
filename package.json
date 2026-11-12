@@ -1,17 +1,22 @@
 {
   "name": "postgresql-backup",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Sauvegardes PostgreSQL automatisées via pg_dump",
   "main": "src/index.js",
   "engines": {
     "node": ">=18.0.0"
   },
   "scripts": {
+    "test": "node --test test/*.test.js",
     "backup": "node src/index.js backup",
     "cleanup": "node src/index.js cleanup",
     "run": "node src/index.js run",
     "restore": "node src/index.js restore",
     "dry-run": "DRY_RUN=true node src/index.js run"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fachabid/postgresql-backup.git"
+  }
 }

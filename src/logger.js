@@ -59,10 +59,17 @@ function createLogger(config) {
     error(message, meta) {
       write('error', message, meta, process.stderr);
     },
+    /** Vide le fichier de log ; à attendre avant de quitter le processus. */
     close() {
-      if (fileStream) {
+      return new Promise((resolve) => {
+        if (!fileStream) {
+          resolve();
+          return;
+        }
+        fileStream.once('finish', resolve);
+        fileStream.once('error', resolve);
         fileStream.end();
-      }
+      });
     },
   };
 }

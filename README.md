@@ -1,14 +1,15 @@
 # postgresql-backup
 
-Application Node.js pour automatiser les sauvegardes PostgreSQL 14 sur Ubuntu via `pg_dump`, avec compression gzip, rétention configurable et intégration systemd.
+Application Node.js pour automatiser les sauvegardes PostgreSQL sur Ubuntu via `pg_dump`, avec compression gzip, rétention configurable, support multi-instance/multi-version et intégration systemd.
 
 ## Fonctionnalités
 
 - Sauvegarde journalière planifiée par **systemd timer**
-- Fichiers horodatés : `{dbname}_YYYY-MM-DD_HH-mm-ss.sql.gz`
+- Fichiers horodatés : `{instance}_{dbname}_YYYY-MM-DD_HH-mm-ss.sql.gz`
 - Compression gzip en streaming (sans fichier temporaire)
 - Suppression automatique des backups de plus de 30 jours (configurable)
-- Support multi-bases (`BACKUP_DATABASES`)
+- Support multi-bases et **multi-instances PostgreSQL** (versions/ports différents)
+- Configuration par fichier `.env` (mode simple ou multi-instances)
 - Option sauvegarde des rôles (`BACKUP_ROLES=true`)
 - Mode dry-run
 - Commande de restauration intégrée
@@ -16,17 +17,24 @@ Application Node.js pour automatiser les sauvegardes PostgreSQL 14 sur Ubuntu vi
 
 ## Prérequis
 
-- Ubuntu avec PostgreSQL 14
+- Ubuntu avec PostgreSQL 14+ (une ou plusieurs instances)
 - Node.js 18+ installé **au niveau système** (voir [Installation de Node.js](#installation-de-nodejs))
-- Client PostgreSQL : `postgresql-client-14`
+- Client(s) PostgreSQL correspondant(s) : `postgresql-client-14`, `postgresql-client-16`, etc.
 
 ```bash
 sudo apt update
 sudo apt install -y postgresql-client-14
 
+# Multi-version : installer un client par version majeure
+# sudo apt install -y postgresql-client-14 postgresql-client-16
+# ls /usr/lib/postgresql/14/bin/pg_dump
+# ls /usr/lib/postgresql/16/bin/pg_dump
+
 # Vérifier pg_dump
 pg_dump --version
 ```
+
+> **Version du client :** utilisez un `pg_dump`/`psql` de la **même version majeure que le serveur** (ou configurez-le par instance avec `pg14_VERSION=14`). Un client plus récent écrit des commandes que le serveur ne connaît pas (par exemple `SET transaction_timeout` avec PostgreSQL 17) et la restauration échoue sur un serveur plus ancien.
 
 ## Installation de Node.js
 
@@ -87,7 +95,7 @@ Les deux commandes doivent réussir avant de cloner le projet et d'activer le ti
 ### Option A — GitHub (recommandé)
 
 ```bash
-sudo git clone https://github.com/chabid19/postgresql-backup.git /opt/postgresql-backup
+sudo git clone https://github.com/fachabid/postgresql-backup.git /opt/postgresql-backup
 ```
 
 GitHub n'accepte plus le mot de passe pour `git clone` en HTTPS. Utilisez un **Personal Access Token** (PAT) ou clonez en **SSH** (`git@github.com:...`).
@@ -158,14 +166,63 @@ Copier `.env.example` comme base :
 | `DRY_RUN` | non | `false` | Mode simulation |
 | `LOG_FORMAT` | non | `text` | `text` ou `json` |
 | `LOG_FILE` | non | — | Chemin fichier log optionnel |
+| `PG_INSTANCES` | non* | — | Liste d'instances (mode multi) : `pg14,pg16` |
+| `MIN_BACKUPS_KEPT` | non | `3` | Sauvegardes les plus récentes conservées par base, même expirées |
 
-Lister les bases disponibles avant de configurer :
+\* Mode **legacy** : `PGUSER` + `BACKUP_DATABASES` suffisent. Mode **multi** : `PG_INSTANCES`.
+
+### Mode legacy (une instance — rétrocompatible)
+
+Une instance implicite `default`. Fichiers : `default_{dbname}_{timestamp}.sql.gz`
+
+```env
+PGHOST=localhost
+PGUSER=postgres
+PGPASSWORD=...
+BACKUP_DATABASES=ile_db,test_vector_db
+```
+
+Les anciens backups `{dbname}_{timestamp}.sql.gz` (sans préfixe) restent restaurables sur l'instance `default`.
+
+### Mode multi-instance (.env)
+
+Plusieurs PostgreSQL sur le même serveur (versions ou ports différents) :
+
+```env
+PG_INSTANCES=pg14,pg16
+
+pg14_HOST=localhost
+pg14_PORT=5432
+pg14_USER=postgres
+pg14_PASSWORD=secret14
+pg14_DATABASES=ile_db,test_vector_db
+pg14_VERSION=14
+
+pg16_HOST=localhost
+pg16_PORT=5433
+pg16_USER=postgres
+pg16_PASSWORD=secret16
+pg16_DATABASES=app_new
+pg16_VERSION=16
+```
+
+- Préfixe instance en majuscules : `pg14_HOST` ou `PG14_HOST`
+- `pg14_VERSION=14` résout automatiquement `/usr/lib/postgresql/14/bin/pg_dump`
+- Binaires explicites optionnels : `pg14_PG_DUMP`, `pg14_PSQL`, etc.
+- Fallback global : `PGUSER` / `PGPASSWORD` si non définis par instance
+
+Fichiers générés : `pg14_ile_db_{timestamp}.sql.gz`, `pg16_app_new_{timestamp}.sql.gz`
+
+### Priorité de chargement
+
+1. `PG_INSTANCES` (.env multi)
+2. Mode legacy (`PGHOST`, `BACKUP_DATABASES`, …)
 
 ```bash
 sudo -u postgres psql -l
 ```
 
-Exemple :
+Exemple legacy :
 
 ```env
 BACKUP_DATABASES=ile_db,test_vector_db
@@ -214,7 +271,7 @@ pgbackup run
 pgbackup --dry-run run
 pgbackup backup
 pgbackup cleanup
-pgbackup restore --file /var/backups/postgresql/myapp_DATE.sql.gz --database myapp_restore_test
+pgbackup restore --file /var/backups/postgresql/pg14_myapp_DATE.sql.gz --database myapp_restore_test --instance pg14
 ```
 
 > **Note :** systemd charge `/etc/postgresql-backup.env` automatiquement via `EnvironmentFile=`. Les commandes manuelles ci-dessus doivent charger ce fichier explicitement avec `source`.
@@ -264,9 +321,14 @@ journalctl -u postgresql-backup.service -f
 | `2` | Erreur de configuration |
 | `3` | Échec cleanup (mode `run`, backup OK) |
 
+En cas d'échec sur une base, les bases suivantes sont quand même sauvegardées ; le code `1` est renvoyé à la fin avec la liste des échecs. Dans ce cas, `run` ne lance pas le nettoyage.
+
 ## Stratégie de rétention
 
-Le module `cleanup.js` parcourt `BACKUP_DIR`, ne traite que les fichiers `*.sql.gz`, compare leur `mtime` à `RETENTION_DAYS` et supprime les fichiers expirés. Aucune récursion dans les sous-dossiers.
+Le module `cleanup.js` regroupe les fichiers `{instance}_{base}_{horodatage}.sql.gz` par base, puis supprime ceux dont le `mtime` dépasse `RETENTION_DAYS` — **sauf** les `MIN_BACKUPS_KEPT` (3 par défaut) plus récents de chaque groupe. Si les sauvegardes cessent de fonctionner, la rétention ne vide donc jamais le répertoire.
+
+- Les fichiers hors format ne sont jamais touchés ; aucune récursion dans les sous-dossiers.
+- Les sauvegardes sont écrites en `*.sql.gz.tmp` puis renommées une fois terminées (mode `0600`). Un résidu `.tmp` de plus d'un jour (crash) est supprimé au nettoyage.
 
 ## Restauration
 
@@ -289,8 +351,10 @@ sudo -u postgres psql -c "CREATE DATABASE myapp_restore_test;"
 3. **Restaurer via l'application**
 
 ```bash
-sudo -u postgres bash -c 'set -a; source /etc/postgresql-backup.env; set +a; /usr/bin/node /opt/postgresql-backup/src/index.js restore --file /var/backups/postgresql/myapp_2026-06-06_02-00-01.sql.gz --database myapp_restore_test'
+sudo -u postgres bash -c 'set -a; source /etc/postgresql-backup.env; set +a; /usr/bin/node /opt/postgresql-backup/src/index.js restore --file /var/backups/postgresql/default_myapp_2026-06-06_02-00-01.sql.gz --database myapp_restore_test'
 ```
+
+L'option `--instance` est requise si plusieurs instances sont configurées et que le préfixe du fichier est ambigu. Sinon, l'instance est déduite du nom de fichier (`pg14_...`, `default_...`, ou format legacy `{db}_...`).
 
 4. **Vérifier les données**
 
@@ -308,6 +372,8 @@ Les counts doivent correspondre.
 sudo -u postgres psql -c "DROP DATABASE myapp_restore_test;"
 ```
 
+> **Comportement de `restore` :** pour une base, psql s'exécute avec `ON_ERROR_STOP=1` et `--single-transaction` — tout est restauré ou rien, et la moindre erreur SQL donne un code de sortie non nul. Restaurer sur une base non vide échoue donc (objets déjà existants) : utilisez une base vide. Pour les rôles, le mode est tolérant (les rôles déjà présents, comme `postgres`, sont signalés en avertissement).
+
 ### Restaurer manuellement
 
 ```bash
@@ -320,7 +386,7 @@ gunzip -c /var/backups/postgresql/myapp_2026-06-06_02-00-01.sql.gz | \
 Restaurer **avant** les bases :
 
 ```bash
-sudo -u postgres bash -c 'set -a; source /etc/postgresql-backup.env; set +a; /usr/bin/node /opt/postgresql-backup/src/index.js restore --file /var/backups/postgresql/roles_2026-06-06_02-00-01.sql.gz'
+sudo -u postgres bash -c 'set -a; source /etc/postgresql-backup.env; set +a; /usr/bin/node /opt/postgresql-backup/src/index.js restore --file /var/backups/postgresql/pg14_roles_2026-06-06_02-00-01.sql.gz --instance pg14'
 ```
 
 Ou manuellement :
@@ -355,6 +421,9 @@ sudo -u postgres psql -d myapp_restore_test -c "CREATE EXTENSION IF NOT EXISTS v
 | `node -v` OK mais `/usr/bin/node` introuvable | `which node` pointe vers nvm → installer NodeSource, vérifier `/usr/bin/node` |
 | systemd échoue avec `status=203/EXEC` | `ExecStart` pointe vers un binaire inexistant → installer Node système ou corriger vers `/usr/bin/node` |
 | Node installé mais version < 18 | Mettre à jour via NodeSource `setup_22.x` |
+| `pg_dump` version incompatible | Installer le client correspondant : `postgresql-client-14` |
+| Binaire introuvable pour une instance | Définir `pg14_VERSION=14` ou `pg14_PG_DUMP=/chemin/pg_dump` |
+| `Instance inconnue` à la restauration | Passer `--instance pg14` ou vérifier le préfixe du fichier |
 | `chown: No such file or directory` | Exécuter `mkdir -p` avant `chown` |
 | `database "xxx" does not exist` | Vérifier `BACKUP_DATABASES` avec `sudo -u postgres psql -l` |
 | Timer actif mais pas de backup visible | `sudo systemctl start postgresql-backup.service` puis `journalctl -u postgresql-backup.service` |
@@ -369,10 +438,20 @@ systemd timer (02:00 daily)
                     └── cleanup.js → suppression > 30 jours
 ```
 
+## Tests
+
+```bash
+npm test                    # tests unitaires et CLI (faux binaires, aucune base requise)
+
+# Test de bout en bout avec un vrai PostgreSQL (client psql/pg_dump requis)
+PG_INTEGRATION=1 PGHOST=localhost PGUSER=postgres PGPASSWORD=... npm test
+```
+
+La CI GitHub Actions exécute la suite complète sur Node 18/20/22 avec un service PostgreSQL 14.
+
 ## Améliorations possibles
 
 - Alertes webhook (Slack, Discord) en cas d'échec
 - Format custom `pg_dump -Fc` + `pg_restore`
 - Chiffrement GPG des archives
 - Copie off-site (S3, rsync)
-- Tests automatisés avec mock de `spawn`
