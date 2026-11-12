@@ -40,6 +40,10 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (['--file', '--database', '--instance'].includes(arg) && (args[i + 1] === undefined || args[i + 1].startsWith('-'))) {
+      throw new Error(`L'option ${arg} attend une valeur`);
+    }
+
     if (arg === '--file') {
       options.file = args[i + 1];
       i += 1;
@@ -58,6 +62,11 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (arg === '--help' || arg === '-h') {
+      positional.push('help');
+      continue;
+    }
+
     if (arg.startsWith('-')) {
       throw new Error(`Option inconnue : ${arg}`);
     }
@@ -72,15 +81,48 @@ function parseArgs(argv) {
   };
 }
 
+async function execute(parsed, config, logger) {
+  switch (parsed.command) {
+    case 'backup':
+      await runBackup(config, logger);
+      break;
+
+    case 'cleanup':
+      await cleanupOldBackups(config, logger);
+      break;
+
+    case 'run': {
+      // Pas de nettoyage si des sauvegardes ont échoué : runBackup lève dans ce cas.
+      await runBackup(config, logger);
+      try {
+        await cleanupOldBackups(config, logger);
+      } catch (err) {
+        err.message = `Échec du nettoyage : ${err.message}`;
+        err.exitCode = EXIT.CLEANUP_FAILED;
+        throw err;
+      }
+      break;
+    }
+
+    case 'restore':
+      await restoreBackup(config, logger, parsed.options);
+      break;
+
+    default:
+      throw new Error(`Commande inconnue : ${parsed.command}\n\n${USAGE}`);
+  }
+}
+
 async function main() {
   let logger;
+  let exitCode = EXIT.SUCCESS;
 
   try {
     const parsed = parseArgs(process.argv.slice(2));
 
     if (['help', '--help', '-h'].includes(parsed.command)) {
       console.log(USAGE);
-      process.exit(EXIT.SUCCESS);
+      return;
     }
 
     if (parsed.dryRun) {
@@ -91,50 +133,24 @@ async function main() {
     config.dryRun = config.dryRun || parsed.dryRun;
     logger = createLogger(config);
 
-    switch (parsed.command) {
-      case 'backup':
-        await runBackup(config, logger);
-        break;
-
-      case 'cleanup':
-        await cleanupOldBackups(config, logger);
-        break;
-
-      case 'run': {
-        await runBackup(config, logger);
-        try {
-          await cleanupOldBackups(config, logger);
-        } catch (err) {
-          logger.error('Échec du nettoyage', { error: err.message });
-          logger.close();
-          process.exit(EXIT.CLEANUP_FAILED);
-        }
-        break;
-      }
-
-      case 'restore':
-        await restoreBackup(config, logger, parsed.options);
-        break;
-
-      default:
-        throw new Error(`Commande inconnue : ${parsed.command}\n\n${USAGE}`);
-    }
-
-    logger.close();
-    process.exit(EXIT.SUCCESS);
+    await execute(parsed, config, logger);
   } catch (err) {
-    const exitCode = err.exitCode || EXIT.BACKUP_FAILED;
+    exitCode = err.exitCode || EXIT.BACKUP_FAILED;
     const message = err.message || String(err);
 
     if (logger) {
       logger.error(message);
-      logger.close();
     } else {
       console.error(message);
     }
-
-    process.exit(exitCode);
   }
+
+  if (logger) {
+    await logger.close();
+  }
+
+  // exitCode plutôt que process.exit() : laisse les flux se vider.
+  process.exitCode = exitCode;
 }
 
 main();
