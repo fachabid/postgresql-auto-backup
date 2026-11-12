@@ -9,7 +9,7 @@ Application Node.js pour automatiser les sauvegardes PostgreSQL sur Ubuntu via `
 - Compression gzip en streaming (sans fichier temporaire)
 - Suppression automatique des backups de plus de 30 jours (configurable)
 - Support multi-bases et **multi-instances PostgreSQL** (versions/ports différents)
-- Configuration `.env` ou fichier YAML (`CONFIG_FILE`)
+- Configuration par fichier `.env` (mode simple ou multi-instances)
 - Option sauvegarde des rôles (`BACKUP_ROLES=true`)
 - Mode dry-run
 - Commande de restauration intégrée
@@ -93,7 +93,7 @@ Les deux commandes doivent réussir avant de cloner le projet et d'activer le ti
 ### Option A — GitHub (recommandé)
 
 ```bash
-sudo git clone https://github.com/chabid19/postgresql-backup.git /opt/postgresql-backup
+sudo git clone https://github.com/fachabid/postgresql-backup.git /opt/postgresql-backup
 ```
 
 GitHub n'accepte plus le mot de passe pour `git clone` en HTTPS. Utilisez un **Personal Access Token** (PAT) ou clonez en **SSH** (`git@github.com:...`).
@@ -165,9 +165,9 @@ Copier `.env.example` comme base :
 | `LOG_FORMAT` | non | `text` | `text` ou `json` |
 | `LOG_FILE` | non | — | Chemin fichier log optionnel |
 | `PG_INSTANCES` | non* | — | Liste d'instances (mode multi) : `pg14,pg16` |
-| `CONFIG_FILE` | non* | — | Chemin YAML (prioritaire sur `PG_INSTANCES`) |
+| `MIN_BACKUPS_KEPT` | non | `3` | Sauvegardes les plus récentes conservées par base, même expirées |
 
-\* Mode **legacy** : `PGUSER` + `BACKUP_DATABASES` suffisent. Mode **multi** : `PG_INSTANCES` ou `CONFIG_FILE`.
+\* Mode **legacy** : `PGUSER` + `BACKUP_DATABASES` suffisent. Mode **multi** : `PG_INSTANCES`.
 
 ### Mode legacy (une instance — rétrocompatible)
 
@@ -211,26 +211,10 @@ pg16_VERSION=16
 
 Fichiers générés : `pg14_ile_db_{timestamp}.sql.gz`, `pg16_app_new_{timestamp}.sql.gz`
 
-### Mode YAML
-
-```bash
-sudo cp /opt/postgresql-backup/config/instances.example.yaml /etc/postgresql-backup.yaml
-sudo chmod 600 /etc/postgresql-backup.yaml
-```
-
-Dans `/etc/postgresql-backup.env` :
-
-```env
-CONFIG_FILE=/etc/postgresql-backup.yaml
-```
-
-Voir [`config/instances.example.yaml`](config/instances.example.yaml) pour le schéma complet.
-
 ### Priorité de chargement
 
-1. `CONFIG_FILE` (YAML)
-2. `PG_INSTANCES` (.env multi)
-3. Mode legacy (`PGHOST`, `BACKUP_DATABASES`, …)
+1. `PG_INSTANCES` (.env multi)
+2. Mode legacy (`PGHOST`, `BACKUP_DATABASES`, …)
 
 ```bash
 sudo -u postgres psql -l
@@ -335,9 +319,14 @@ journalctl -u postgresql-backup.service -f
 | `2` | Erreur de configuration |
 | `3` | Échec cleanup (mode `run`, backup OK) |
 
+En cas d'échec sur une base, les bases suivantes sont quand même sauvegardées ; le code `1` est renvoyé à la fin avec la liste des échecs. Dans ce cas, `run` ne lance pas le nettoyage.
+
 ## Stratégie de rétention
 
-Le module `cleanup.js` parcourt `BACKUP_DIR`, ne traite que les fichiers `*.sql.gz`, compare leur `mtime` à `RETENTION_DAYS` et supprime les fichiers expirés. Aucune récursion dans les sous-dossiers.
+Le module `cleanup.js` regroupe les fichiers `{instance}_{base}_{horodatage}.sql.gz` par base, puis supprime ceux dont le `mtime` dépasse `RETENTION_DAYS` — **sauf** les `MIN_BACKUPS_KEPT` (3 par défaut) plus récents de chaque groupe. Si les sauvegardes cessent de fonctionner, la rétention ne vide donc jamais le répertoire.
+
+- Les fichiers hors format ne sont jamais touchés ; aucune récursion dans les sous-dossiers.
+- Les sauvegardes sont écrites en `*.sql.gz.tmp` puis renommées une fois terminées (mode `0600`). Un résidu `.tmp` de plus d'un jour (crash) est supprimé au nettoyage.
 
 ## Restauration
 
@@ -380,6 +369,8 @@ Les counts doivent correspondre.
 ```bash
 sudo -u postgres psql -c "DROP DATABASE myapp_restore_test;"
 ```
+
+> **Comportement de `restore` :** pour une base, psql s'exécute avec `ON_ERROR_STOP=1` et `--single-transaction` — tout est restauré ou rien, et la moindre erreur SQL donne un code de sortie non nul. Restaurer sur une base non vide échoue donc (objets déjà existants) : utilisez une base vide. Pour les rôles, le mode est tolérant (les rôles déjà présents, comme `postgres`, sont signalés en avertissement).
 
 ### Restaurer manuellement
 
@@ -445,10 +436,20 @@ systemd timer (02:00 daily)
                     └── cleanup.js → suppression > 30 jours
 ```
 
+## Tests
+
+```bash
+npm test                    # tests unitaires et CLI (faux binaires, aucune base requise)
+
+# Test de bout en bout avec un vrai PostgreSQL (client psql/pg_dump requis)
+PG_INTEGRATION=1 PGHOST=localhost PGUSER=postgres PGPASSWORD=... npm test
+```
+
+La CI GitHub Actions exécute la suite complète sur Node 18/20/22 avec un service PostgreSQL 14.
+
 ## Améliorations possibles
 
 - Alertes webhook (Slack, Discord) en cas d'échec
 - Format custom `pg_dump -Fc` + `pg_restore`
 - Chiffrement GPG des archives
 - Copie off-site (S3, rsync)
-- Tests automatisés avec mock de `spawn`
