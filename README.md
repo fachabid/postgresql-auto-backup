@@ -1,6 +1,6 @@
 # postgresql-backup
 
-[![CI](https://github.com/fachabid/postgresql-backup/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/fachabid/postgresql-backup/actions/workflows/ci.yml)
+[![CI](https://github.com/fachabid/postgresql-auto-backup/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/fachabid/postgresql-auto-backup/actions/workflows/ci.yml)
 [![Licence : MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 ![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)
 
@@ -99,7 +99,7 @@ Les deux commandes doivent réussir avant de cloner le projet et d'activer le ti
 ### Option A — GitHub (recommandé)
 
 ```bash
-sudo git clone https://github.com/fachabid/postgresql-backup.git /opt/postgresql-backup
+sudo git clone https://github.com/fachabid/postgresql-auto-backup.git /opt/postgresql-backup
 ```
 
 GitHub n'accepte plus le mot de passe pour `git clone` en HTTPS. Utilisez un **Personal Access Token** (PAT) ou clonez en **SSH** (`git@github.com:...`).
