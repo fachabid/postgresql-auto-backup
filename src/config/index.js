@@ -4,7 +4,6 @@ const path = require('path');
 const { loadEnv } = require('../env');
 const { loadLegacyConfig } = require('./legacy');
 const { loadInstancesFromEnv } = require('./instances-env');
-const { loadInstancesFromYaml } = require('./instances-yaml');
 const { validateInstances } = require('./schema');
 const {
   EXIT,
@@ -22,9 +21,7 @@ function loadConfig(options = {}) {
   const env = process.env;
   let config;
 
-  if (env.CONFIG_FILE) {
-    config = loadInstancesFromYaml(env.CONFIG_FILE, env);
-  } else if (env.PG_INSTANCES) {
+  if (env.PG_INSTANCES) {
     config = loadInstancesFromEnv(env);
   } else {
     config = loadLegacyConfig(env);
