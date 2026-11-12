@@ -6,21 +6,8 @@ const path = require('path');
 const { pipeline } = require('stream/promises');
 const { createGunzip } = require('zlib');
 const { buildPgEnv } = require('./backup');
+const { isRolesBackup } = require('./filenames');
 const { findInstanceById, resolveInstanceFromFilename } = require('./config');
-
-function isRolesBackup(filePath, instanceId = null) {
-  const basename = path.basename(filePath, '.sql.gz');
-
-  if (basename === 'roles') {
-    return true;
-  }
-
-  if (instanceId) {
-    return basename === `${instanceId}_roles`;
-  }
-
-  return basename.endsWith('_roles');
-}
 
 function resolveInstance(config, options) {
   if (options.instance) {
@@ -100,9 +87,12 @@ async function restoreBackup(config, logger, options) {
     rolesBackup,
   });
 
+  // Base : tout ou rien (transaction unique + arrêt à la première erreur SQL),
+  // sinon psql sort en code 0 même après des erreurs.
+  // Rôles : tolérant, car les rôles déjà présents (ex. postgres) provoquent des erreurs bénignes.
   const psqlArgs = rolesBackup
     ? ['-f', '-']
-    : ['-d', database, '-f', '-'];
+    : ['-v', 'ON_ERROR_STOP=1', '--single-transaction', '-d', database, '-f', '-'];
 
   const child = spawn(instance.bin.psql, psqlArgs, {
     env: buildPgEnv(instance),
@@ -141,7 +131,14 @@ async function restoreBackup(config, logger, options) {
     throw new Error(`Erreur lors de la restauration : ${err.message}`);
   }
 
+  if (rolesBackup && stderr.trim()) {
+    logger.warn('Restauration des rôles terminée avec des avertissements', {
+      instance: instance.id,
+      stderr: stderr.trim(),
+    });
+  }
+
   logger.info('Restauration terminée', { instance: instance.id, file: resolvedFile });
 }
 
-module.exports = { restoreBackup, isRolesBackup, resolveInstance };
+module.exports = { restoreBackup, resolveInstance };

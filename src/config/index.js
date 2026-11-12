@@ -1,7 +1,7 @@
 'use strict';
 
-const path = require('path');
 const { loadEnv } = require('../env');
+const { parseBackupName } = require('../filenames');
 const { loadLegacyConfig } = require('./legacy');
 const { loadInstancesFromEnv } = require('./instances-env');
 const { validateInstances } = require('./schema');
@@ -48,37 +48,35 @@ function findInstanceById(config, instanceId) {
 }
 
 function resolveInstanceFromFilename(config, filePath) {
-  const basename = path.basename(filePath, '.sql.gz');
+  const parsed = parseBackupName(filePath);
 
-  if (basename === 'roles') {
-    return findInstanceById(config, 'default') || config.instances[0] || null;
+  if (!parsed) {
+    return null;
   }
 
-  for (const instance of config.instances) {
-    if (basename === `${instance.id}_roles`) {
-      return instance;
-    }
-  }
-
-  for (const instance of config.instances) {
-    const prefix = `${instance.id}_`;
-    if (basename.startsWith(prefix)) {
-      return instance;
-    }
-  }
-
+  const { stem } = parsed;
   const defaultInstance = findInstanceById(config, 'default') || config.instances[0];
 
-  if (defaultInstance) {
-    for (const db of defaultInstance.databases) {
-      if (basename.startsWith(`${db}_`)) {
-        return defaultInstance;
-      }
-    }
+  // Ancien format sans préfixe d'instance : `roles_<ts>` et `<db>_<ts>`
+  if (stem === 'roles') {
+    return defaultInstance || null;
+  }
 
-    if (config.instances.length === 1) {
-      return defaultInstance;
+  // Préfixe le plus long d'abord, pour que `pg14` l'emporte sur `pg1`.
+  const byIdLength = [...config.instances].sort((a, b) => b.id.length - a.id.length);
+
+  for (const instance of byIdLength) {
+    if (stem === `${instance.id}_roles` || stem.startsWith(`${instance.id}_`)) {
+      return instance;
     }
+  }
+
+  if (defaultInstance && defaultInstance.databases.includes(stem)) {
+    return defaultInstance;
+  }
+
+  if (config.instances.length === 1) {
+    return config.instances[0];
   }
 
   return null;
