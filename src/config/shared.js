@@ -55,18 +55,25 @@ function parseInstanceList(value) {
 
 function loadGlobalSettings(env = process.env) {
   const errors = [];
-  let retentionDays;
+  let retentionDays = 30;
+  let minBackupsKept = 3;
 
   try {
     retentionDays = parsePositiveInt(env.RETENTION_DAYS, 30);
   } catch (err) {
-    errors.push(err.message);
-    retentionDays = 30;
+    errors.push(`RETENTION_DAYS : ${err.message}`);
+  }
+
+  try {
+    minBackupsKept = parsePositiveInt(env.MIN_BACKUPS_KEPT, 3);
+  } catch (err) {
+    errors.push(`MIN_BACKUPS_KEPT : ${err.message}`);
   }
 
   return {
     backupDir: path.resolve(env.BACKUP_DIR || '/var/backups/postgresql'),
     retentionDays,
+    minBackupsKept,
     dryRun: parseBoolean(env.DRY_RUN, false),
     logFormat: env.LOG_FORMAT === 'json' ? 'json' : 'text',
     logFile: env.LOG_FILE ? path.resolve(env.LOG_FILE) : null,

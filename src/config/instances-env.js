@@ -70,9 +70,9 @@ function loadInstancesFromEnv(env = process.env) {
         parseBoolean(env.BACKUP_ROLES, false),
       ),
       bin: resolvePgBinaries({
-        pgDump: getInstanceEnv(env, id, 'PG_DUMP'),
-        pgDumpall: getInstanceEnv(env, id, 'PG_DUMPALL'),
-        psql: getInstanceEnv(env, id, 'PSQL'),
+        pgDump: getInstanceEnv(env, id, 'PG_DUMP') || env.PG_DUMP,
+        pgDumpall: getInstanceEnv(env, id, 'PG_DUMPALL') || env.PG_DUMPALL,
+        psql: getInstanceEnv(env, id, 'PSQL') || env.PSQL,
         version: getInstanceEnv(env, id, 'VERSION'),
       }),
     });
@@ -86,6 +86,7 @@ function loadInstancesFromEnv(env = process.env) {
     instances,
     backupDir: global.backupDir,
     retentionDays: global.retentionDays,
+    minBackupsKept: global.minBackupsKept,
     backupRoles: instances.some((i) => i.backupRoles),
     dryRun: global.dryRun,
     logFormat: global.logFormat,

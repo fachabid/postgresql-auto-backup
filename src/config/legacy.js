@@ -55,6 +55,7 @@ function loadLegacyConfig(env = process.env) {
     instances: [instance],
     backupDir: global.backupDir,
     retentionDays: global.retentionDays,
+    minBackupsKept: global.minBackupsKept,
     backupRoles: instance.backupRoles,
     dryRun: global.dryRun,
     logFormat: global.logFormat,
