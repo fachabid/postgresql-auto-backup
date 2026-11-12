@@ -1,6 +1,6 @@
 # postgresql-backup
 
-[![CI](https://github.com/fachabid/postgresql-auto-backup/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/fachabid/postgresql-auto-backup/actions/workflows/ci.yml)
+[![CI](https://github.com/fachabid/postgresql-auto-backup/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/fachabid/postgresql-auto-backup/actions/workflows/ci.yml)
 [![Licence : MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 ![Node.js 18+](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)
 
