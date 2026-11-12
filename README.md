@@ -34,6 +34,8 @@ sudo apt install -y postgresql-client-14
 pg_dump --version
 ```
 
+> **Version du client :** utilisez un `pg_dump`/`psql` de la **même version majeure que le serveur** (ou configurez-le par instance avec `pg14_VERSION=14`). Un client plus récent écrit des commandes que le serveur ne connaît pas (par exemple `SET transaction_timeout` avec PostgreSQL 17) et la restauration échoue sur un serveur plus ancien.
+
 ## Installation de Node.js
 
 Le service systemd et les commandes manuelles utilisent **`/usr/bin/node`** sous l'utilisateur **`postgres`**. Node doit donc être installé **au niveau système**, pas uniquement pour un utilisateur.
